@@ -1,0 +1,70 @@
+/* 故事层：盖在游戏画面上面，打架时隐藏 */
+#story {
+  --bg: #e7dfd1;
+  --panel: #f4ecdc;
+  --ink: #2b241c;
+  --muted: #7a6e5c;
+  --line: #d3c6ad;
+  --accent: #8a3b2a;
+  --btn: #ece2cd;
+  --btn-hover: #e3d6bd;
+  --gov: #34466b;
+  --self: #4a7a3b;
+  --you: #8a3b2a;
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  overflow-y: auto;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC", serif;
+  line-height: 1.9;
+}
+#story[hidden] { display: none; }
+#story * { box-sizing: border-box; }
+#story .wrap {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 24px;
+}
+@media (max-width: 760px) {
+  #story .wrap { grid-template-columns: minmax(0, 1fr); }
+}
+#story h1 { grid-column: 1 / -1; margin: 0; font-size: 22px; letter-spacing: 0.15em; }
+#story .story, #story .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+#story .story { padding: 24px 24px 20px; min-height: 60vh; }
+#story .day { color: var(--muted); font-size: 14px; letter-spacing: 0.2em; margin-bottom: 12px; }
+#story .say { color: var(--muted); border-left: 3px solid var(--line); padding-left: 12px; margin-bottom: 16px; }
+#story .say p, #story .text p { margin: 0 0 4px; }
+#story .text p.q { padding-left: 1em; }
+#story .skill { color: var(--accent); font-weight: bold; }
+#story .choices { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
+#story button.choice {
+  font: inherit;
+  text-align: left;
+  background: var(--btn);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+#story button.choice:hover { background: var(--btn-hover); }
+#story button.choice.fight { border-color: var(--accent); }
+#story aside { display: flex; flex-direction: column; gap: 16px; }
+#story .card { padding: 14px 16px; }
+#story .card h2 { margin: 0 0 8px; font-size: 15px; letter-spacing: 0.1em; }
+#story .muted { color: var(--muted); font-size: 13px; line-height: 1.6; }
+#story svg { width: 100%; height: auto; display: block; }
+#story svg .axis { stroke: var(--line); stroke-width: 1; }
+#story svg .lab { fill: var(--muted); font-size: 11px; }
+#story svg .npc-gov { fill: var(--gov); }
+#story svg .npc-self { fill: var(--self); }
+#story svg .npc-name { fill: var(--ink); font-size: 11px; }
+#story svg .path { fill: none; stroke: var(--you); stroke-width: 1.5; stroke-dasharray: 3 3; opacity: 0.6; }
+#story svg .you { fill: var(--you); }
+#story .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+#story .chip { border: 1px solid var(--accent); color: var(--accent); border-radius: 999px; padding: 0 10px; font-size: 13px; }

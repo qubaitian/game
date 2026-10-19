@@ -1,9 +1,10 @@
 import type { Match, Seat, Slot } from '../../shared/combat.ts';
+import type { Driver } from './battle/driver';
 
 type ServerMsg = { t: 'state'; online: [boolean, boolean]; match: Match };
 
 /** 连对战服务器：收状态，发按键。断线每秒重连一次 */
-export class Net {
+export class Net implements Driver {
   match: Match | null = null;
   online: [boolean, boolean] = [false, false];
   connected = false;

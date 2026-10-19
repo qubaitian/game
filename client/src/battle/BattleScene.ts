@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
 import {
-  ARENA, SECTS, STARTUP, SWING, attackRange, skillOf,
+  ARENA, STARTUP, SWING, attackRange, sectOf, skillOf,
   type Fighter, type GameEvent, type Match, type MoveDef, type Seat, type SkillDef, type Slot,
 } from '../../../shared/combat.ts';
 import { Net } from '../net';
+import type { Driver } from './driver';
 import { pupu, slashFlash, stone } from '../toy/effects';
 import { INK, Toy } from '../toy/Toy';
 
@@ -24,7 +25,7 @@ interface Button {
 
 export class BattleScene extends Phaser.Scene {
   private seat!: Seat;
-  private net!: Net;
+  private driver!: Driver;
   private g!: Phaser.GameObjects.Graphics;
   private toys!: [Toy, Toy];
   private hudTitle: Phaser.GameObjects.Text[] = [];
@@ -43,40 +44,46 @@ export class BattleScene extends Phaser.Scene {
     super('battle');
   }
 
-  init(data: { seat: Seat }) {
+  /** 不给 driver 就连对战服务器；故事模式传进 LocalDriver */
+  init(data: { seat: Seat; driver?: Driver }) {
     this.seat = data.seat;
+    this.driver = data.driver ?? new Net(this.seat);
+  }
+
+  /** 这个座位用的武学配置。联网时还没收到状态，就先按门派算 */
+  private kit(seat: Seat) {
+    return sectOf(this.driver.match?.fighters[seat] ?? ({ sect: seat } as Fighter));
   }
 
   create() {
-    this.net = new Net(this.seat);
     // 标签页在后台时不放特效，不然切回来会一下子全冒出来
-    this.net.onState = (m) => {
+    this.driver.onState = (m) => {
       if (!document.hidden) m.events.forEach((e) => this.onEvent(e, m));
     };
     this.g = this.add.graphics();
     this.toys = [
-      new Toy(sx(-2), 1, SECTS[0].color, GROUND),
-      new Toy(sx(2), -1, SECTS[1].color, GROUND),
+      new Toy(sx(-2), 1, this.kit(0).color, GROUND),
+      new Toy(sx(2), -1, this.kit(1).color, GROUND),
     ];
 
     for (const seat of [0, 1] as const) {
       const x = seat === 0 ? 24 : 1280 - 24 - 380;
-      const sect = SECTS[seat];
+      const sect = this.kit(seat);
       const who = seat === this.seat ? '（你）' : '（对手）';
-      this.hudTitle.push(this.add.text(x, 16, `${sect.name} · ${sect.neigong.name}${who}`, { fontFamily: FONT, fontSize: '20px', color: css(sect.color) }));
+      this.hudTitle.push(this.add.text(x, 16, `${sect.name}${sect.neigong ? ` · ${sect.neigong.name}` : ''}${who}`, { fontFamily: FONT, fontSize: '20px', color: css(sect.color) }));
       this.hudNums.push(this.add.text(x, 44, '', { fontFamily: FONT, fontSize: '13px', color: '#3a3328', lineSpacing: 5 }));
       this.hudStatus.push(this.add.text(x, 112, '', { fontFamily: FONT, fontSize: '15px', color: '#3a3328' }));
       this.castLabel.push(this.add.text(0, 0, '', { fontFamily: FONT, fontSize: '15px', color: '#3a3328' }).setOrigin(0.5, 1));
     }
 
     this.createButtons();
-    this.info = this.add.text(CX, 556, '', { fontFamily: FONT, fontSize: '16px', color: '#5a5040', align: 'center' }).setOrigin(0.5, 0);
+    this.info = this.add.text(CX, 556, this.driver.intro ?? '', { fontFamily: FONT, fontSize: '16px', color: '#5a5040', align: 'center' }).setOrigin(0.5, 0);
     this.overlay = this.add
       .text(CX, 260, '', { fontFamily: FONT, fontSize: '30px', color: '#3a3328', align: 'center', backgroundColor: '#efe8dbdd', padding: { x: 24, y: 14 } })
       .setOrigin(0.5)
       .setDepth(50)
       .setInteractive({ useHandCursor: true })
-      .on('pointerdown', () => (this.net.replaced ? this.net.takeOver() : this.net.reset()));
+      .on('pointerdown', () => (this.driver.replaced ? this.driver.takeOver() : this.driver.reset()));
 
     const kb = this.input.keyboard!;
     const key = (code: string, down: () => void, up?: () => void) => {
@@ -87,20 +94,24 @@ export class BattleScene extends Phaser.Scene {
     key('A', () => (this.held.keyLeft = true), () => (this.held.keyLeft = false));
     key('RIGHT', () => (this.held.keyRight = true), () => (this.held.keyRight = false));
     key('D', () => (this.held.keyRight = true), () => (this.held.keyRight = false));
-    key('Q', () => this.net.cast('shenfa'));
-    key('ONE', () => this.net.cast('move0'));
-    key('TWO', () => this.net.cast('move1'));
-    key('THREE', () => this.net.cast('move2'));
-    key('E', () => this.net.cast('huti'));
-    key('R', () => this.net.reset());
+    key('Q', () => this.driver.cast('shenfa'));
+    key('ONE', () => this.driver.cast('move0'));
+    key('TWO', () => this.driver.cast('move1'));
+    key('THREE', () => this.driver.cast('move2'));
+    key('E', () => this.driver.cast('huti'));
+    key('R', () => this.driver.reset());
     // 切走窗口时松开所有方向
-    this.game.events.on('blur', () => Object.assign(this.held, { left: false, right: false, keyLeft: false, keyRight: false }));
+    const release = () => Object.assign(this.held, { left: false, right: false, keyLeft: false, keyRight: false });
+    this.game.events.on('blur', release);
+    this.events.once('shutdown', () => this.game.events.off('blur', release));
   }
 
   // ---------- 按钮 ----------
 
   private createButtons() {
-    const ids: ButtonId[] = ['left', 'shenfa', 'move0', 'move1', 'move2', 'huti', 'right'];
+    // 没学的格子不放按钮
+    const all: ButtonId[] = ['left', 'shenfa', 'move0', 'move1', 'move2', 'huti', 'right'];
+    const ids = all.filter((id) => id === 'left' || id === 'right' || skillOf(this.me(), id));
     const keys: Record<ButtonId, string> = { left: '← / A', shenfa: 'Q', move0: '1', move1: '2', move2: '3', huti: 'E', right: '→ / D' };
     const w = 156, h = 74, gap = 12;
     const x0 = CX - (ids.length * w + (ids.length - 1) * gap) / 2 + w / 2;
@@ -120,10 +131,10 @@ export class BattleScene extends Phaser.Scene {
         const set = (v: boolean) => (this.held[id] = v);
         rect.on('pointerdown', () => set(true)).on('pointerup', () => set(false)).on('pointerout', () => set(false));
       } else {
-        const def = skillOf(this.me(), id);
+        const def = skillOf(this.me(), id)!;
         title.setText(def.name);
         sub.setText(costText(def));
-        rect.on('pointerdown', () => this.net.cast(id));
+        rect.on('pointerdown', () => this.driver.cast(id));
         rect.on('pointerover', () => this.info.setText(describe(def, id)).setColor('#5a5040'));
         rect.on('pointerout', () => this.info.setText(''));
       }
@@ -131,7 +142,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private me(): Fighter {
-    return this.net?.match?.fighters[this.seat] ?? ({ sect: this.seat } as Fighter);
+    return this.driver?.match?.fighters[this.seat] ?? ({ sect: this.seat } as Fighter);
   }
 
   private updateButtons(m: Match) {
@@ -142,7 +153,7 @@ export class BattleScene extends Phaser.Scene {
       if (b.id === 'left' || b.id === 'right') {
         active = this.held[b.id] || (b.id === 'left' ? this.held.keyLeft : this.held.keyRight);
       } else {
-        const def = skillOf(f, b.id);
+        const def = skillOf(f, b.id)!;
         enabled = f.neili >= def.neili && f.shenfa >= def.shenfa && !f.casting && !f.dash;
         if (b.id === 'huti') active = f.hutiBuff > 0;
         else if (b.id === 'shenfa') active = f.shenfaBuff > 0 || f.casting?.slot === 'shenfa' || !!f.dash;
@@ -152,7 +163,7 @@ export class BattleScene extends Phaser.Scene {
         else if (active && f.queued && b.id !== 'shenfa' && b.id !== 'huti') b.sub.setText(`还剩 ${f.queued.left} 下`);
         else b.sub.setText(costText(def));
       }
-      const color = SECTS[this.seat].color;
+      const color = this.kit(this.seat).color;
       b.rect.setFillStyle(active ? 0xe3d6bd : 0xf4ecdc).setStrokeStyle(active ? 4 : 2, active ? color : INK);
       b.rect.setAlpha(enabled ? 1 : 0.45);
       b.title.setAlpha(enabled ? 1 : 0.45);
@@ -163,13 +174,14 @@ export class BattleScene extends Phaser.Scene {
 
   update(_time: number, delta: number) {
     const dt = delta / 1000;
+    this.driver.tick?.(dt);
     const dir = (this.held.right || this.held.keyRight ? 1 : 0) - (this.held.left || this.held.keyLeft ? 1 : 0);
     if (dir !== this.sentDir) {
       this.sentDir = dir;
-      this.net.dir(dir);
+      this.driver.dir(dir);
     }
 
-    const m = this.net.match;
+    const m = this.driver.match;
     const g = this.g;
     g.clear();
     this.drawGround(g);
@@ -209,17 +221,17 @@ export class BattleScene extends Phaser.Scene {
     this.drawHud(g, m);
     this.updateButtons(m);
 
-    if (!this.net.online[1 - this.seat]) {
+    if (!this.driver.online[1 - this.seat]) {
       this.overlay.setText(`等待对手进入…\n对手打开 http://${location.host}/${this.seat === 0 ? 2 : 1}`).setVisible(true);
     } else if (m.winner !== null) {
-      this.overlay.setText(`${m.winner === this.seat ? '胜利' : '败北'}\n点这里或按 R 再来一局`).setVisible(true);
+      this.overlay.setText(this.driver.endText ?? `${m.winner === this.seat ? '胜利' : '败北'}\n点这里或按 R 再来一局`).setVisible(true);
     } else this.overlay.setVisible(false);
   }
 
   /** 没连上服务器时要显示的提示，连上了返回 null */
   private offlineText() {
-    if (this.net.replaced) return '这一边已经在别的页面打开了\n点这里改在本页继续';
-    if (!this.net.connected) return '连不上对战服务器，正在重连…\n（npm run dev 会同时启动服务器）';
+    if (this.driver.replaced) return '这一边已经在别的页面打开了\n点这里改在本页继续';
+    if (!this.driver.connected) return '连不上对战服务器，正在重连…\n（npm run dev 会同时启动服务器）';
     return null;
   }
 
@@ -242,7 +254,7 @@ export class BattleScene extends Phaser.Scene {
     const x0 = sx(f.x + dir * min);
     const x1 = sx(f.x + dir * max);
     const y = GROUND + (mine ? 22 : 34);
-    const color = SECTS[f.sect].color;
+    const color = sectOf(f).color;
     g.lineStyle(mine ? 6 : 4, color, inRange ? 0.85 : 0.25).lineBetween(x0, y, x1, y);
     g.fillStyle(color, inRange ? 0.9 : 0.35).fillCircle(x1, y, mine ? 4 : 3);
   }
@@ -254,11 +266,11 @@ export class BattleScene extends Phaser.Scene {
     const headY = toy.chestY() - 105;
     if (f.casting) {
       const p = 1 - f.casting.left / STARTUP;
-      g.lineStyle(4, SECTS[seat].color, 0.9);
+      g.lineStyle(4, sectOf(f).color, 0.9);
       g.beginPath();
       g.arc(toy.x, headY, 14, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Phaser.Math.Clamp(p, 0, 1));
       g.strokePath();
-      label.setText(skillOf(f, f.casting.slot).name).setPosition(toy.x, headY - 20).setColor(css(SECTS[seat].color)).setVisible(true);
+      label.setText(skillOf(f, f.casting.slot)!.name).setPosition(toy.x, headY - 20).setColor(css(sectOf(f).color)).setVisible(true);
     } else label.setVisible(false);
   }
 
@@ -279,9 +291,9 @@ export class BattleScene extends Phaser.Scene {
       const parts: string[] = [];
       if (f.pozhan) parts.push(`破绽 ${f.pozhan}`);
       if (f.handu) parts.push(`寒毒 ${f.handu}`);
-      if (f.hutiBuff > 0) parts.push(`${SECTS[f.sect].huti.name} ${f.hutiBuff.toFixed(0)}s`);
-      if (f.shenfaBuff > 0) parts.push(`${SECTS[f.sect].shenfa.name} ${f.shenfaBuff.toFixed(0)}s`);
-      if (f.queued) parts.push(`${SECTS[f.sect].moves[f.queued.move].name} ×${f.queued.left}`);
+      if (f.hutiBuff > 0) parts.push(`${sectOf(f).huti!.name} ${f.hutiBuff.toFixed(0)}s`);
+      if (f.shenfaBuff > 0) parts.push(`${sectOf(f).shenfa!.name} ${f.shenfaBuff.toFixed(0)}s`);
+      if (f.queued) parts.push(`${sectOf(f).moves[f.queued.move].name} ×${f.queued.left}`);
       this.hudStatus[seat].setText(parts.join('   '));
     }
   }
@@ -319,8 +331,8 @@ export class BattleScene extends Phaser.Scene {
         this.floatText(other.x, other.chestY() - 90, '躲开', '#7a6e5c', 18);
         break;
       case 'cast': {
-        this.floatText(me.x, me.chestY() - 140, e.name, css(SECTS[e.seat].color), 22);
-        if (e.slot === 'huti' || (e.slot === 'shenfa' && SECTS[e.seat].shenfa.duration > 0)) this.ring(me, SECTS[e.seat].color);
+        this.floatText(me.x, me.chestY() - 140, e.name, css(this.kit(e.seat).color), 22);
+        if (e.slot === 'huti' || (e.slot === 'shenfa' && (this.kit(e.seat).shenfa?.duration ?? 0) > 0)) this.ring(me, this.kit(e.seat).color);
         break;
       }
       case 'dash':
@@ -328,6 +340,9 @@ export class BattleScene extends Phaser.Scene {
         break;
       case 'dot':
         this.floatText(me.x + 30, me.chestY() - 60, `-${e.dmg}`, '#3f7f8f', 16);
+        break;
+      case 'self':
+        this.floatText(me.x - 30, me.chestY() - 60, `${e.msg} -${e.dmg}`, '#a8402e', 16);
         break;
       case 'fail':
         if (e.seat === this.seat) {

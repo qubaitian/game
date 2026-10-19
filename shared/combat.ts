@@ -46,10 +46,10 @@ export interface SectDef {
   weapon: { name: string; kind: WeaponKind; min: number; max: number };
   speed: number;
   movePower: number; // 内功给招式的威力加成
-  neigong: { name: string; tier: string; desc: string };
-  shenfa: SkillDef;
+  neigong?: { name: string; tier: string; desc: string };
+  shenfa?: SkillDef; // 故事里的人物可能没学身法、护体
   moves: MoveDef[];
-  huti: SkillDef;
+  huti?: SkillDef;
 }
 
 export const SECTS: SectDef[] = [
@@ -87,6 +87,14 @@ export const SECTS: SectDef[] = [
   },
 ];
 
+/** 所有能上场的武学配置。前两个是对战的两个门派，故事模式的人物用 addKit 加在后面 */
+export const KITS: SectDef[] = [...SECTS];
+
+export function addKit(kit: SectDef) {
+  KITS.push(kit);
+  return KITS.length - 1;
+}
+
 export interface Swing {
   left: number;
   move: number; // -1 是平 A
@@ -103,6 +111,7 @@ export interface Fighter {
   dir: -1 | 0 | 1; // 玩家按住的方向
   hp: number;
   maxHp: number;
+  minHp: number; // 血最低停在这里；故事模式里玩家是 1，不会输
   neili: number;
   shenfa: number;
   atk: number;
@@ -127,6 +136,7 @@ export type GameEvent =
   | { t: 'cast'; seat: Seat; slot: Slot; name: string }
   | { t: 'dash'; seat: Seat }
   | { t: 'dot'; seat: Seat; dmg: number }
+  | { t: 'self'; seat: Seat; dmg: number; msg: string } // 出招伤到自己
   | { t: 'fail'; seat: Seat; msg: string }
   | { t: 'ko'; seat: Seat };
 
@@ -145,6 +155,7 @@ function newFighter(seat: Seat): Fighter {
     dir: 0,
     hp: 1000,
     maxHp: 1000,
+    minHp: 0,
     neili: 100,
     shenfa: 100,
     atk: 100,
@@ -163,15 +174,21 @@ function newFighter(seat: Seat): Fighter {
   };
 }
 
-export function createMatch(): Match {
-  return { time: 0, fighters: [newFighter(0), newFighter(1)], winner: null, events: [] };
+/** setup 用来改两边的初始属性，比如故事模式换武学配置、调低对手的攻 */
+export function createMatch(setup?: [Partial<Fighter>, Partial<Fighter>]): Match {
+  const fighters: [Fighter, Fighter] = [
+    { ...newFighter(0), ...setup?.[0] },
+    { ...newFighter(1), ...setup?.[1] },
+  ];
+  return { time: 0, fighters, winner: null, events: [] };
 }
 
 export function sectOf(f: Fighter) {
-  return SECTS[f.sect];
+  return KITS[f.sect];
 }
 
-export function skillOf(f: Fighter, slot: Slot): SkillDef | MoveDef {
+/** 没学的格子返回 undefined */
+export function skillOf(f: Fighter, slot: Slot): SkillDef | MoveDef | undefined {
   const s = sectOf(f);
   if (slot === 'shenfa') return s.shenfa;
   if (slot === 'huti') return s.huti;
@@ -182,7 +199,7 @@ export function skillOf(f: Fighter, slot: Slot): SkillDef | MoveDef {
 export function attackRange(f: Fighter) {
   const s = sectOf(f);
   const src = f.queued ? s.moves[f.queued.move] : s.weapon;
-  const bonus = s.shenfa.id === 'baichi' && f.shenfaBuff > 0 ? 1 : 0;
+  const bonus = s.shenfa?.id === 'baichi' && f.shenfaBuff > 0 ? 1 : 0;
   return { min: src.min, max: src.max + bonus };
 }
 
@@ -200,18 +217,22 @@ export function cast(m: Match, seat: Seat, slot: Slot) {
   const fail = (msg: string) => m.events.push({ t: 'fail', seat, msg });
   if (f.casting || f.dash) return fail('正在施展');
   const def = skillOf(f, slot);
+  if (!def) return fail('没学这一格的武学');
   if (f.neili < def.neili) return fail('内力不足');
   if (f.shenfa < def.shenfa) return fail('身法不足');
   f.neili -= def.neili;
   f.shenfa -= def.shenfa;
   m.events.push({ t: 'cast', seat, slot, name: def.name });
 
-  if (slot === 'huti') f.hutiBuff = sectOf(f).huti.duration;
+  if (slot === 'huti') f.hutiBuff = sectOf(f).huti!.duration;
   else if (slot === 'shenfa') {
-    if (def.id === 'lingyun') f.casting = { slot, left: 0.5 };
-    else f.shenfaBuff = sectOf(f).shenfa.duration;
+    if (DASHES.includes(def.id)) f.casting = { slot, left: 0.5 };
+    else f.shenfaBuff = sectOf(f).shenfa!.duration;
   } else f.casting = { slot, left: STARTUP };
 }
+
+/** 冲刺类的身法：起手 0.5 秒后冲出 3m */
+const DASHES = ['lingyun', 'hushen'];
 
 function opponent(m: Match, f: Fighter) {
   return m.fighters[f.seat === 0 ? 1 : 0];
@@ -230,9 +251,10 @@ function finishCast(m: Match, f: Fighter) {
   const slot = f.casting!.slot;
   f.casting = null;
   if (slot === 'shenfa') {
-    // 凌云飞渡
+    // 冲刺：没按方向时，凌云飞渡冲向对方，护身步往后退
     const o = opponent(m, f);
-    const dir = f.dir !== 0 ? f.dir : Math.sign(o.x - f.x) || 1;
+    const toward = Math.sign(o.x - f.x) || 1;
+    const dir = f.dir !== 0 ? f.dir : sectOf(f).shenfa?.id === 'hushen' ? -toward : toward;
     f.dash = { dir, left: 3 };
     m.events.push({ t: 'dash', seat: f.seat });
   } else {
@@ -256,7 +278,7 @@ function startSwing(m: Match, f: Fighter) {
 }
 
 function damage(m: Match, victim: Fighter, amount: number) {
-  victim.hp = Math.max(0, victim.hp - amount);
+  victim.hp = Math.max(victim.minHp, victim.hp - amount);
   if (victim.hp <= 0 && m.winner === null) {
     m.winner = victim.seat === 0 ? 1 : 0;
     m.events.push({ t: 'ko', seat: m.winner });
@@ -276,17 +298,24 @@ function resolveSwing(m: Match, f: Fighter) {
     f.queued.left--;
   }
 
+  // 飞石的抄本错了一个字，不管中没中，每扔一次手腕疼一下
+  if (mv?.id === 'feishi') {
+    m.events.push({ t: 'self', seat: f.seat, dmg: 10, msg: '手腕疼' });
+    damage(m, f, 10);
+  }
+
   if (d < sw.min || d > sw.max) {
     m.events.push({ t: 'miss', seat: f.seat, kind: sw.kind });
   } else {
     // 受伤率 = 100 / 防 + 破绽层数 × 10%
     const rate = 100 / o.def + o.pozhan * 0.1;
-    const guard = sectOf(o).huti.id === 'tiebushan' && o.hutiBuff > 0 ? 0.8 : 1;
+    const guard = o.hutiBuff > 0 ? (GUARDS[sectOf(o).huti?.id ?? ''] ?? 1) : 1;
     const dmg = Math.round(f.atk * sw.power * (f.qishi / 100) * rate * guard);
     m.events.push({ t: 'hit', seat: f.seat, kind: sw.kind, dmg, move: mv ? mv.name : null });
 
     if (mv) {
-      if (mv.id === 'yunshou') o.pozhan = Math.min(MAX_STACK, o.pozhan + 1);
+      if (mv.id === 'yunshou' || mv.id === 'qinna') o.pozhan = Math.min(MAX_STACK, o.pozhan + 1);
+      if (mv.id === 'zhuangjia') moveBy(m, o, Math.sign(o.x - f.x) * 0.6);
       if (mv.id === 'zhuifeng') f.neili = Math.min(100, f.neili + 1);
       if (mv.id === 'xuanming') o.handu = Math.min(MAX_STACK, o.handu + 1);
       if (mv.id === 'shijue' && f.queued) {
@@ -294,12 +323,15 @@ function resolveSwing(m: Match, f: Fighter) {
         if (f.queued.hits % 2 === 0) o.pozhan = Math.min(MAX_STACK, o.pozhan + 1);
       }
     }
-    if (sectOf(o).huti.id === 'hanbing' && o.hutiBuff > 0) f.handu = Math.min(MAX_STACK, f.handu + 1);
+    if (sectOf(o).huti?.id === 'hanbing' && o.hutiBuff > 0) f.handu = Math.min(MAX_STACK, f.handu + 1);
     damage(m, o, dmg);
   }
 
   if (f.queued && f.queued.left <= 0) f.queued = null;
 }
+
+/** 护体开着时受到的伤害倍数 */
+const GUARDS: Record<string, number> = { tiebushan: 0.8, tingfeng: 0.5 };
 
 export function step(m: Match, dt: number) {
   if (m.winner !== null) return;
