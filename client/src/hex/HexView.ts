@@ -1,8 +1,9 @@
 import './hex.css';
 import {
-  COLS, LESSONS, ROWS, SKILLS, TEACHER, attackArea, sameCell, targets, unitAt, unitOf,
+  COLS, LESSONS, PLACE_NAME, ROWS, SKILLS, TEACHER, attackArea, inCombat, sameCell, talkOf, targets, unitAt, unitOf,
   type Board, type Cell, type SkillId, type Unit,
 } from '../../../shared/hex.ts';
+import { changeMap } from './fx';
 
 // 每种状态是好是坏，决定方框的颜色
 const KIND: Record<string, 'good' | 'bad'> = {
@@ -81,10 +82,10 @@ const nameSize = (name: string) => `${Math.min(16, 56 / name.length)}cqw`;
 
 const ACTIONS: SkillId[] = ['move', 'attack'];
 
-/** 棋盘上亮着的格子：能走的、攻击范围、范围里能打的敌人 */
-type Marks = { move: Cell[]; area: Cell[]; hit: Cell[] };
+/** 棋盘上亮着的格子：能走的、攻击范围、范围里能打的敌人，战斗外还要走的路 */
+type Marks = { move: Cell[]; area: Cell[]; hit: Cell[]; path: Cell[] };
 
-/** 教学关页面。联网在 main.ts，这里只管画和点 */
+/** 游戏页面。联网在 main.ts，这里只管画和点 */
 export class HexView {
   private board: Board | null = null;
   private mode: SkillId | null = null; // 选了哪个技能，等着选目标；轮到自己时默认是移动
@@ -93,6 +94,8 @@ export class HexView {
   private pan = { x: 0, y: 0 }; // 拖动的偏移，以棋盘居中的位置为 0
   private zoom = 1; // 滚轮缩放，1 是整张地图正好放进中间区域
   private shape = ''; // 上次画格子时的样子，没变就只更新冷却
+  private talkKey = ''; // 上次画对话框时的内容，没变就不重画，免得点按钮时按钮被换掉
+  private next: Board | null = null; // 换地图的动效还没放完时，新棋盘先放这里
   private readonly root: HTMLElement;
   private readonly view: HTMLElement;
   private readonly boardEl: HTMLElement;
@@ -106,7 +109,6 @@ export class HexView {
     private readonly send: (msg: object) => void,
     private readonly logout: () => void,
   ) {
-    document.title = '教学关 · 团战';
     this.root = document.createElement('div');
     this.root.className = 'hexpage';
     this.root.innerHTML = `${sectorDefs()}
@@ -116,6 +118,7 @@ export class HexView {
         <div class="timeline"><div class="track"></div></div>
       </div>
       <div class="actions"></div>
+      <div class="talk" hidden></div>
       <div class="sysmask" hidden><div class="sysbox">
         <h2>系统</h2>
         <p class="who">${address ? `钱包 ${short(address)}` : '游客'}</p>
@@ -157,6 +160,7 @@ export class HexView {
     sys.addEventListener('click', () => this.toggleSystem(true));
     bar.appendChild(sys);
     this.bindSystem();
+    this.bindTalk();
 
     this.bindPointer();
     new ResizeObserver(() => {
@@ -165,8 +169,25 @@ export class HexView {
     }).observe(this.view);
   }
 
-  /** 服务器发来新的棋盘 */
+  /** 服务器发来新的棋盘。换了一张新棋盘（比如去了武当山），先播动效：盖住地图，换上新的，再打开 */
   update(board: Board) {
+    if (this.next) {
+      this.next = board;
+      return;
+    }
+    if (this.board && board.id !== this.board.id) {
+      this.next = board;
+      this.root.querySelector<HTMLElement>('.talk')!.hidden = true;
+      this.talkKey = '';
+      void changeMap(this.view, PLACE_NAME[board.place], () => {
+        this.board = this.next;
+        this.next = null;
+        this.zoom = 1;
+        this.pan = { x: 0, y: 0 };
+        this.render();
+      });
+      return;
+    }
     this.board = board;
     this.render();
   }
@@ -192,6 +213,28 @@ export class HexView {
       if (what || e.target === mask) this.toggleSystem(false);
     });
     window.addEventListener('keydown', this.onKey);
+  }
+
+  // ---- 对话框：屏幕下方，盖住动作栏。点选项就告诉服务器 ----
+
+  private bindTalk() {
+    this.root.querySelector('.talk')!.addEventListener('click', (e) => {
+      const option = (e.target as HTMLElement).closest<HTMLElement>('[data-option]')?.dataset.option;
+      if (option) this.send({ t: 'choose', option });
+    });
+  }
+
+  private renderTalk(b: Board) {
+    const talk = b.talking ? talkOf(b, b.talking) : null;
+    const key = talk ? JSON.stringify(talk) : '';
+    if (key === this.talkKey) return;
+    this.talkKey = key;
+    const el = this.root.querySelector<HTMLElement>('.talk')!;
+    el.hidden = !talk;
+    if (!talk) return;
+    el.innerHTML = `<div class="who">${talk.who}</div>
+      <div class="said">${talk.text}</div>
+      <div class="options">${talk.options.map((o) => `<button data-option="${o.id}">${o.text}</button>`).join('')}</div>`;
   }
 
   private toggleSystem(open: boolean) {
@@ -292,10 +335,16 @@ export class HexView {
   private click(x: number, y: number) {
     const hex = this.hexAt(x, y);
     if (!hex || !this.board) return;
+    const to = hex.dataset.cell!.split(',').map(Number) as Cell;
+    // 战斗外：点空格子就走过去，点能说话的人就走到他旁边说话
+    if (!inCombat(this.board) && !this.board.talking) {
+      const id = hex.dataset.unit;
+      if (!id) return this.send({ t: 'walk', to });
+      if (talkOf(this.board, id)) return this.send({ t: 'talk', who: id });
+    }
     // 点亮着的空格子就是移动，点攻击范围里的敌人就是攻击
     const skill: SkillId | null = hex.classList.contains('can') ? 'move' : hex.classList.contains('hit') ? 'attack' : null;
     if (this.mode && skill) {
-      const to = hex.dataset.cell!.split(',').map(Number) as Cell;
       this.send({ t: 'act', skill, to });
       this.mode = null;
       this.render();
@@ -321,9 +370,11 @@ export class HexView {
   private render() {
     const b = this.board;
     if (!b) return;
+    document.title = `${PLACE_NAME[b.place]} · 团战`;
     const me = unitOf(b);
-    const ready = !!me && me.cd === 0;
-    // 轮到自己时，自动选上移动，能走的格子直接亮起来
+    const fight = inCombat(b);
+    const ready = fight && !!me && me.cd === 0;
+    // 战斗中轮到自己时，自动选上移动，能走的格子直接亮起来。战斗外没有技能，点哪走哪
     if (!ready) this.mode = null;
     else if (!this.mode) this.mode = 'move';
     // 默认（移动）时，能走的格子和攻击范围一起亮；选了攻击，就只亮攻击范围
@@ -331,7 +382,9 @@ export class HexView {
       move: this.mode === 'move' ? targets(b, 'move') : [],
       area: this.mode ? attackArea(b) : [],
       hit: this.mode ? targets(b, 'attack') : [],
+      path: b.path,
     };
+    this.view.classList.toggle('peace', !fight && !b.talking);
 
     // 只有位置、资源、亮着的格子变了才重画格子；冷却每次都更新
     const shape = JSON.stringify([b.units.map((u) => [u.id, u.at, u.hp, u.mp, u.sp, u.buffs]), marks, b.lesson]);
@@ -349,6 +402,7 @@ export class HexView {
     }
     this.renderTimeline(b);
     this.renderPanels();
+    this.renderTalk(b);
   }
 
   /** 尖头朝上的六边形，奇数行往右错半格 */
@@ -371,7 +425,8 @@ export class HexView {
         const u = unitAt(b, cell);
         const has = (list: Cell[]) => list.some((t) => sameCell(t, cell));
         const cls = ['hex', u ? u.side : '', u && u === me ? 'mine' : '',
-          has(marks.move) ? 'can' : '', has(marks.area) ? 'area' : '', has(marks.hit) ? 'hit' : ''].join(' ');
+          has(marks.move) ? 'can' : '', has(marks.area) ? 'area' : '', has(marks.hit) ? 'hit' : '',
+          has(marks.path) ? 'path' : '', u && talkOf(b, u.id) ? 'talker' : ''].join(' ');
         const style = `left:${x - w / 2 + gap / 2}px;top:${y - R + gap / 2}px;width:${w - gap}px;height:${R * 2 - gap}px`;
         html += `<div class="${cls}" data-cell="${c},${r}" ${u ? `data-unit="${u.id}"` : ''} style="${style}">${u ? rings(u) : ''}<div class="in">${u ? `
           <div class="name" style="font-size:${nameSize(u.name)}">${u.name}</div>

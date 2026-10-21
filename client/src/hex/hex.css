@@ -166,3 +166,46 @@
   background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 10px;
 }
 .hexpage .sysbox button:hover { background: #f3e6c4; border-color: #b08a3a; }
+
+/* ---- 战斗外：点空格子走过去，点能说话的人走到他旁边 ---- */
+.hexpage .view.peace .hex:not(.friend):not(.foe):hover { --fill: #f3e6c4; cursor: pointer; }
+.hexpage .view.peace .hex.talker { cursor: pointer; }
+/* 还要走的格子：里面泛金 */
+.hex.path { --fill: #f3e6c4; --edge: #d8c08a; }
+
+/* ---- 对话框：屏幕下方，盖住动作栏，系统按钮还露在右边 ---- */
+.hexpage .talk {
+  position: absolute; left: 10px; right: 120px; bottom: 10px; z-index: 6;
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: start;
+  padding: 14px 18px; background: var(--panel); border: 2px solid var(--ink); border-radius: 12px;
+}
+.hexpage .talk[hidden] { display: none; }
+.hexpage .talk .who { grid-row: span 2; font-size: 20px; font-weight: 900; letter-spacing: 0.1em; padding-right: 16px; border-right: 1px solid var(--line); }
+.hexpage .talk .said { font-size: 18px; line-height: 1.5; }
+.hexpage .talk .options { display: flex; gap: 10px; flex-wrap: wrap; }
+.hexpage .talk .options button {
+  font: inherit; font-size: 17px; letter-spacing: 0.1em; padding: 8px 18px; cursor: pointer;
+  background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 10px;
+}
+.hexpage .talk .options button:hover { background: #f3e6c4; border-color: #b08a3a; }
+
+/* ---- 换地图的动效（水墨）：只盖住地图区域。.shut 是盖住，.named 是地名显出来 ---- */
+.hexpage .fx { position: absolute; inset: 0; z-index: 5; overflow: hidden; }
+.hexpage .fx .place {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: clamp(40px, 8vw, 88px); font-weight: 900; letter-spacing: 0.4em; text-indent: 0.4em;
+  color: #f4efe4; opacity: 0; transform: scale(0.96); transition: opacity 0.3s, transform 0.9s ease-out;
+}
+.hexpage .fx.named .place { opacity: 1; transform: none; }
+
+/* 墨从四周往中间晕开（中间的空洞变小），打开时空洞从中间变大。毛边靠噪声滤镜。
+   墨比地图区域大一圈，毛边扭出来的缺口落在看不见的地方 */
+@property --hole { syntax: '<percentage>'; inherits: false; initial-value: 90%; }
+.hexpage .fx .ink { position: absolute; inset: -15%; filter: url(#fx-ink-edge); }
+.hexpage .fx .cover {
+  position: absolute; inset: 0; background: #1b1713;
+  --hole: 90%;
+  mask-image: radial-gradient(circle at 50% 50%, transparent var(--hole), #000 calc(var(--hole) + 12%));
+  transition: --hole 0.9s cubic-bezier(0.5, 0, 0.3, 1);
+}
+.hexpage .fx.shut .cover { --hole: -15%; }

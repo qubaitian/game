@@ -3,7 +3,10 @@ import { randomBytes } from 'node:crypto';
 import { verifyMessage, type Hex } from 'viem';
 import { parseSiweMessage, validateSiweMessage } from 'viem/siwe';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { SKILLS, TICK, act, createTutorial, step, type Board, type Cell, type SkillId } from '../../shared/hex.ts';
+import {
+  SKILLS, TICK, act, createTutorial, createWudang, step, talk, talkOf, walk,
+  type Board, type Cell, type OptionId, type SkillId,
+} from '../../shared/hex.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const TOKEN_LIFE = 7 * 24 * 3600 * 1000; // token 管 7 天，这期间刷新页面不用再签
@@ -16,12 +19,15 @@ const newNonce = () => randomBytes(16).toString('hex');
 // 游客的账号名用这个开头，钱包地址都是 0x 开头，不会撞上
 const GUEST = 'guest:';
 
-// 没登录时只认 token、siwe、guest；登录以后才认 act、reset、logout
+// 没登录时只认 token、siwe、guest；登录以后才认 act、walk、talk、choose、reset、logout
 type ClientMsg =
   | { t: 'token'; token: string }
   | { t: 'siwe'; message: string; signature: Hex }
   | { t: 'guest' }
   | { t: 'act'; skill: SkillId; to: Cell }
+  | { t: 'walk'; to: Cell }
+  | { t: 'talk'; who: string }
+  | { t: 'choose'; option: OptionId }
   | { t: 'reset' }
   | { t: 'logout' };
 
@@ -106,8 +112,17 @@ wss.on('connection', (ws, req) => {
     }
 
     const acc = accounts.get(address)!;
-    if (msg.t === 'act' && Object.hasOwn(SKILLS, msg.skill) && Array.isArray(msg.to)) act(acc.board, msg.skill, [Number(msg.to[0]), Number(msg.to[1])]);
-    else if (msg.t === 'reset') acc.board = createTutorial();
+    const b = acc.board;
+    if (msg.t === 'act' && Object.hasOwn(SKILLS, msg.skill) && Array.isArray(msg.to)) act(b, msg.skill, [Number(msg.to[0]), Number(msg.to[1])]);
+    else if (msg.t === 'walk' && Array.isArray(msg.to)) walk(b, [Number(msg.to[0]), Number(msg.to[1])]);
+    else if (msg.t === 'talk') talk(b, String(msg.who));
+    else if (msg.t === 'choose') {
+      // 只认对话框里现在有的选项
+      const options = b.talking ? talkOf(b, b.talking)?.options ?? [] : [];
+      if (!options.some((o) => o.id === msg.option)) return;
+      if (msg.option === 'wudang') acc.board = createWudang();
+      else b.talking = null;
+    } else if (msg.t === 'reset') acc.board = createTutorial();
     else if (msg.t === 'logout') {
       // 作废 token，连接还留着，回到没登录的样子。游客退出后再也登不回去，账号直接删掉
       if (token) tokens.delete(token);
