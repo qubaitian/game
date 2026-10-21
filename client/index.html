@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>团战</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #f4efe4; color: #2b2620; }
+      body { font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC", serif; }
+      /* 登录页：标题、钱包按钮、提示 */
+      .login { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18vh 16px; }
+      .login h1 { margin: 0; font-size: 32px; letter-spacing: 0.3em; }
+      .login p { margin: 0; color: #7a6f60; }
+      .login .wallets { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+      .login button, .login .get {
+        display: flex; align-items: center; gap: 10px;
+        padding: 12px 24px; border: 1px solid #ddd2bf; border-radius: 10px;
+        background: #fffaf0; color: inherit; text-decoration: none; font: inherit; font-size: 20px; cursor: pointer;
+      }
+      .login button:disabled { opacity: 0.5; cursor: default; }
+      .login button img { width: 28px; height: 28px; }
+      .login .status { min-height: 1.5em; }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
